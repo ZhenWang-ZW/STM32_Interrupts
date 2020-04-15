@@ -25,7 +25,7 @@ UART_HandleTypeDef huart2;
 const GPIO_TYPE GPIO_ARRAY[8] = {PA10, PB3, PB5, PB4, PB10, PA8, PC1, PC0};
 
 // USART2
-uint8_t msg[20]="";
+uint8_t msg[50]="";
 char Rx_Char;
 
 // TIM6
@@ -40,10 +40,16 @@ float ADC_Voltage;
 int previous = -1, current = 1;
 
 // TIM1 IC
-static uint32_t captures[2];
-static uint32_t capture_difference, time_period;
-static int edge_count;
-static capture_completed = 0;
+uint32_t IC_Value1 = 0,
+		IC_Value2 = 0,
+		Difference = 0,
+		Frequency = 0;
+uint8_t Is_First_Captured = 0;
+
+// Continuous modes flag
+char continuous_cmd;
+uint8_t Is_Continuous_Mode_ON = 0;
+
 /* Global variables. END ---------------------------------------------------- */
 
 
@@ -72,24 +78,23 @@ void Interrupts_start(void){
 
 /* TIM1 CH2 Interrupts */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	if(edge_count==0){
-		captures[edge_count] = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-		edge_count++;
-	}
-	else{
-		captures[edge_count] = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-		edge_count=0;
-		capture_completed=1;
-	}
-
-	if(capture_completed){
-		if(captures[1]>captures[0]){
-			capture_difference = captures[1] - captures[0];
-		}else{
-			capture_difference = ((0xffff - captures[0]) + captures[1] + 1);
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
+		if(Is_First_Captured == 0){
+			IC_Value1 =  HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+			Is_First_Captured=1;
+		}else if(Is_First_Captured==1){
+			IC_Value2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+			if(IC_Value2 > IC_Value1){
+				Difference = IC_Value2 - IC_Value1;
+			}else if(IC_Value2<IC_Value1){
+				Difference = ((0xffff-IC_Value1)+IC_Value2)+1;
+			}else{
+				Error_Handler();
+			}
+			Frequency = HAL_RCC_GetPCLK1Freq()/Difference;
+			Is_First_Captured = 0;
 		}
-		capture_completed = 0;
-		time_period = capture_difference/1;
+
 	}
 }
 
@@ -137,7 +142,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 	{
 	  ADC_Result = HAL_ADC_GetValue(&hadc1);
 	}
-	ADC_Voltage = (float)ADC_Result  * 2.0 / 4095.0;
+	ADC_Voltage = (float)ADC_Result  * 3.3 / 4095.0;
 	if(ADC_Voltage<1){
 		tim6_period = 2500;
 		current = 0;
@@ -175,6 +180,24 @@ int main(void)
   /* Infinite loop */
   while (1)
   {
+	  // check if Continuous mode is on or not
+	  if(Is_Continuous_Mode_ON==1){
+		  // check if Continuous mode cmd
+		  if(continuous_cmd=='C' || continuous_cmd=='c'){
+			  // check if usart captured cmd
+			  if(!(Rx_Char=='E' || Rx_Char=='e') && !(Rx_Char=='C' || Rx_Char=='c')){
+				  Rx_Char = continuous_cmd;
+				  strcpy(msg, "Continuous Mode is ON, enter E/e to stop!");
+				  USART_PRINT(msg);
+			  }
+		  }else if(continuous_cmd=='W' || continuous_cmd=='w'){
+			  if(!(Rx_Char=='Q' || Rx_Char=='q') && !(Rx_Char=='W' || Rx_Char=='w')){
+				  Rx_Char = continuous_cmd;
+				  strcpy(msg, "Continuous Mode is ON, enter Q/q to stop!");
+				  USART_PRINT(msg);
+			  }
+		  }
+	  }
 	  switch(Rx_Char){
 		case 'A':
 		case 'a':
@@ -190,38 +213,37 @@ int main(void)
 			break;
 		case 'T':
 		case 't':
-			sprintf(msg, "ADC Voltage = %c\r\n", Rx_Char);
-			HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg), HAL_MAX_DELAY);
+			sprintf(msg, "Timer output Period = %d us", Difference);
+			USART_PRINT(msg);
 			Rx_Char='\0';
 			break;
 		case 'F':
 		case 'f':
-			sprintf(msg, "ADC Voltage = %c\r\n", Rx_Char);
-			HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg), HAL_MAX_DELAY);
+			sprintf(msg, "Timer output Frequency = %.2f kHz", (float)Frequency/1000);
+			USART_PRINT(msg);
 			Rx_Char='\0';
 			break;
 		case 'C':
 		case 'c':
-			sprintf(msg, "ADC Voltage = %c\r\n", Rx_Char);
-			HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg), HAL_MAX_DELAY);
-			Rx_Char='\0';
-			break;
-		case 'E':
-		case 'e':
-			sprintf(msg, "ADC Voltage = %c\r\n", Rx_Char);
-			HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg), HAL_MAX_DELAY);
-			Rx_Char='\0';
+			sprintf(msg, "ADC Voltage = %.2f", ADC_Voltage);
+			USART_PRINT(msg);
+			continuous_cmd='c';
+			Is_Continuous_Mode_ON=1;
+			HAL_Delay(1000);
 			break;
 		case 'W':
 		case 'w':
-			sprintf(msg, "ADC Voltage = %c\r\n", Rx_Char);
-			HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg), HAL_MAX_DELAY);
-			Rx_Char='\0';
+			sprintf(msg, "Timer output Frequency = %.2f kHz", (float)Frequency/1000);
+			USART_PRINT(msg);
+			continuous_cmd='w';
+			Is_Continuous_Mode_ON=1;
+			HAL_Delay(1000);
 			break;
+		case 'E':
+		case 'e':
 		case 'Q':
 		case 'q':
-			sprintf(msg, "ADC Voltage = %c\r\n", Rx_Char);
-			HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg), HAL_MAX_DELAY);
+			Is_Continuous_Mode_ON=0;
 			Rx_Char='\0';
 			break;
 		default:
